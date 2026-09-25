@@ -474,11 +474,12 @@ button {
   user-select: none;
 }
 
-/* Wrap at exactly `cols` characters so the layout can predict row counts. */
+/* The layout word-wraps lines itself and the renderer inserts the breaks, so
+   the browser must not wrap: row counts stay exactly as predicted. */
 .file-card__code .lc {
   min-width: 0;
-  white-space: break-spaces;
-  word-break: break-all;
+  overflow: hidden;
+  white-space: pre;
 }
 
 .file-card__more {

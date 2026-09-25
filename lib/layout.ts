@@ -31,6 +31,8 @@ export type PlacedFile = {
   text: string;
   /** Characters per visual row; longer lines wrap. */
   cols: number;
+  /** Per shown line: offsets where word-wrapped continuation rows start. */
+  wraps: number[][];
   lineCount: number;
   hiddenLines: number;
   x: number;
@@ -70,6 +72,7 @@ type Box =
       file: SourceFile;
       text: string;
       cols: number;
+      wraps: number[][];
       lineCount: number;
       hiddenLines: number;
     }
@@ -105,7 +108,6 @@ function buildTree(files: SourceFile[], rootName: string): Dir {
 // Everything below U+1100 (Latin, Greek, Cyrillic, box drawing, …) is covered
 // by JetBrains Mono at a fixed advance. Wider scripts (CJK, emoji) come from
 // fallback fonts, so their real widths are measured once and cached.
-const NARROW = /^[\u0000-ჿ]*$/;
 const charWidths = new Map<string, number>();
 let measureCtx: CanvasRenderingContext2D | null | undefined;
 
@@ -128,26 +130,57 @@ function charWidth(ch: string): number {
 
 /** Width of a line in character columns (wide glyphs count as more than one). */
 function lineColumns(line: string): number {
-  if (NARROW.test(line)) return line.length;
+  if (/^[\u0000-ჿ]*$/.test(line)) return line.length;
   let w = 0;
   for (const ch of line) w += charWidth(ch);
   return w / CHAR_W;
 }
 
-/** Visual rows a line occupies when broken anywhere at `cols` columns. */
-function wrappedRows(line: string, cols: number): number {
-  if (NARROW.test(line)) return Math.max(1, Math.ceil(line.length / cols));
+const isSpace = (ch: string) => ch === " " || ch === " " || ch === "　";
+// Where an over-long token (typically a URL or path) may break if it must.
+const isSoftBreak = (ch: string) => "/-?&=.,;:_)]}".includes(ch);
+
+/**
+ * Word-wraps a line to `cols` columns and returns the string offsets where
+ * new visual rows start. Lines break only after whitespace. A single token
+ * longer than a whole row (usually a URL) breaks after punctuation such as
+ * "/" or "-", and only as a last resort mid-character-run.
+ * Trailing spaces may hang past the edge (they are invisible), like editors do.
+ */
+function wrapLine(line: string, cols: number): number[] {
   const max = cols * CHAR_W + 0.01;
-  let rows = 1;
-  let w = 0;
+  const breaks: number[] = [];
+  let rowStart = 0;
+  let rowWidth = 0;
+  // Offsets just after the last space / punctuation in the current row.
+  let space = -1;
+  let soft = -1;
+
+  let i = 0;
   for (const ch of line) {
-    const cw = charWidth(ch);
-    if (w + cw > max) {
-      rows++;
-      w = cw;
-    } else w += cw;
+    const w = charWidth(ch);
+    if (!isSpace(ch) && rowWidth + w > max) {
+      const at = space > rowStart ? space : soft > rowStart ? soft : i;
+      breaks.push(at);
+      rowStart = at;
+      // Rescan the text carried over to the new row so its own break
+      // opportunities stay usable.
+      rowWidth = 0;
+      space = soft = -1;
+      let j = at;
+      for (const c of line.slice(at, i)) {
+        rowWidth += charWidth(c);
+        j += c.length;
+        if (isSpace(c)) space = j;
+        else if (isSoftBreak(c)) soft = j;
+      }
+    }
+    rowWidth += w;
+    i += ch.length;
+    if (isSpace(ch)) space = i;
+    else if (isSoftBreak(ch)) soft = i;
   }
-  return rows;
+  return breaks;
 }
 
 function expandTabs(line: string): string {
@@ -158,9 +191,9 @@ function expandTabs(line: string): string {
 }
 
 /**
- * Sizes a card from its content. Long lines soft-wrap at exactly `cols`
- * characters (the renderer breaks anywhere, and the font is monospace), so the
- * number of visual rows — and therefore the card height — is known up front.
+ * Sizes a card from its content. Long lines are word-wrapped here, not by the
+ * browser: the renderer inserts breaks at exactly these offsets, so the number
+ * of visual rows, and therefore the card height, is known up front.
  */
 function measureFile(file: SourceFile): Box {
   const lines = file.content.split("\n");
@@ -173,18 +206,19 @@ function measureFile(file: SourceFile): Box {
   }
   const cols = Math.min(MAX_COLS, Math.max(MIN_COLS, Math.ceil(longest)));
 
+  const wraps: number[][] = [];
   let rows = 0;
   let kept = 0;
   for (; kept < shown.length && rows < MAX_ROWS; kept++) {
-    const lineRows = wrappedRows(shown[kept], cols);
-    if (rows + lineRows > MAX_ROWS) {
+    let breaks = longest > cols ? wrapLine(shown[kept], cols) : [];
+    if (rows + breaks.length + 1 > MAX_ROWS) {
       // A huge line (e.g. minified code) is cut to fit the remaining budget.
-      shown[kept] = shown[kept].slice(0, (MAX_ROWS - rows) * cols);
-      rows = MAX_ROWS;
-      kept++;
-      break;
+      const allowed = MAX_ROWS - rows;
+      shown[kept] = shown[kept].slice(0, breaks[allowed - 1]);
+      breaks = breaks.slice(0, allowed - 1);
     }
-    rows += lineRows;
+    wraps.push(breaks);
+    rows += breaks.length + 1;
   }
   const hiddenLines = lines.length - kept;
 
@@ -196,6 +230,7 @@ function measureFile(file: SourceFile): Box {
     h,
     file,
     text: shown.slice(0, kept).join("\n"),
+    wraps,
     cols,
     lineCount: lines.length,
     hiddenLines,
@@ -301,6 +336,7 @@ export function computeLayout(files: SourceFile[], rootName: string): Layout {
         name: node.file.path.slice(node.file.path.lastIndexOf("/") + 1),
         text: node.text,
         cols: node.cols,
+        wraps: node.wraps,
         lineCount: node.lineCount,
         hiddenLines: node.hiddenLines,
         x, y, w: node.w, h: node.h, depth,

@@ -65,14 +65,43 @@ function splitLines(html: string): string[] {
   return lines;
 }
 
-/** Renders the code body as a grid of rows: line number + soft-wrapped line. */
+/**
+ * Inserts "\n" into a highlighted line at the given source-text offsets.
+ * Offsets count characters of the original line, so tags are skipped and each
+ * HTML entity (`&lt;`, `&amp;`, …) counts as the single character it encodes.
+ */
+function insertBreaks(html: string, offsets: number[]): string {
+  if (offsets.length === 0) return html;
+  let out = "";
+  let pos = 0;
+  let next = 0;
+  for (let i = 0; i < html.length; ) {
+    if (html[i] === "<") {
+      const end = html.indexOf(">", i) + 1;
+      out += html.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (next < offsets.length && pos === offsets[next]) {
+      out += "\n";
+      next++;
+    }
+    const len = html[i] === "&" ? html.indexOf(";", i) + 1 - i : 1;
+    out += html.slice(i, i + len);
+    i += len;
+    pos++;
+  }
+  return out;
+}
+
+/** Renders the code body as a grid of rows: line number + word-wrapped line. */
 function renderRows(file: PlacedFile): string {
   const cached = rowsCache.get(file);
   if (cached !== undefined) return cached;
   const lines = splitLines(highlight(file.path, file.text));
   let html = "";
   for (let i = 0; i < lines.length; i++) {
-    html += `<div class="ln">${i + 1}</div><div class="lc">${lines[i]}</div>`;
+    html += `<div class="ln">${i + 1}</div><div class="lc">${insertBreaks(lines[i], file.wraps[i] ?? [])}</div>`;
   }
   if (file.hiddenLines > 0) {
     html += `<div class="ln"></div><div class="lc file-card__more">… ${file.hiddenLines} more lines</div>`;
