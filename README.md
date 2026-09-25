@@ -4,6 +4,8 @@ Explore any public GitHub repository on an infinite canvas. Every text file is
 rendered as a code card, and files are packed into nested folder boxes that
 mirror the repository structure.
 
+**Live demo:** https://infinite-code-tawny.vercel.app
+
 ## Run
 
 ```bash
