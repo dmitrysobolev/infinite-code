@@ -1,6 +1,13 @@
 import { RepoForm } from "@/components/RepoForm";
 
-const EXAMPLES = ["vercel/swr", "pmndrs/zustand", "sindresorhus/ky", "expressjs/express", "tj/commander.js"];
+// Readable, explorable repos: knowledge bases and ASCII art beat raw source code.
+const EXAMPLES = [
+  "HackTricks-wiki/hacktricks",
+  "swisskyrepo/PayloadsAllTheThings",
+  "donnemartin/system-design-primer",
+  "OWASP/CheatSheetSeries",
+  "xero/figlet-fonts",
+];
 
 export default function Home() {
   return (

@@ -13,6 +13,8 @@ const TEXT_EXTENSIONS = new Set([
   "nix", "cmake", "mk", "dockerfile", "sql", "prisma",
   // docs & data
   "md", "mdx", "markdown", "rst", "txt", "adoc", "tex", "csv", "tsv", "svg", "diff", "patch",
+  // ASCII art: FIGlet / TOIlet fonts draw every glyph with plain characters
+  "flf", "tlf",
 ]);
 
 const TEXT_FILENAMES = new Set([

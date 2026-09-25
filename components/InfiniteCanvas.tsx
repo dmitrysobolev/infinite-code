@@ -6,7 +6,7 @@ import { FileCard } from "./FileCard";
 
 type Camera = { x: number; y: number; scale: number };
 
-const MIN_SCALE = 0.01;
+const MIN_SCALE = 0.002; // big repos (1500 files) span ~100k px
 const MAX_SCALE = 4;
 const DETAIL_SCALE = 0.3; // below this, cards render as lightweight placeholders
 const CULL_MARGIN = 400; // screen px rendered beyond the viewport edges
@@ -326,7 +326,7 @@ export function InfiniteCanvas({ layout }: { layout: Layout }) {
 
       <div className="zoom-controls" onPointerDown={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
         <button onClick={() => zoomAt(1 / 1.4, size.w / 2, size.h / 2, true)} aria-label="Zoom out">−</button>
-        <span className="zoom-controls__value">{Math.round(camera.scale * 100)}%</span>
+        <span className="zoom-controls__value">{camera.scale < 0.01 ? (camera.scale * 100).toFixed(1) : Math.round(camera.scale * 100)}%</span>
         <button onClick={() => zoomAt(1.4, size.w / 2, size.h / 2, true)} aria-label="Zoom in">+</button>
         <button className="zoom-controls__fit" onClick={fitAll}>Fit</button>
       </div>
