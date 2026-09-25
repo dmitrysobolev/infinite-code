@@ -2,7 +2,7 @@
 
 import { memo, useMemo } from "react";
 import hljs from "highlight.js/lib/common";
-import { MAX_LINES, type PlacedFile } from "@/lib/layout";
+import { CHAR_W, GUTTER, type PlacedFile } from "@/lib/layout";
 import { extensionOf } from "@/lib/textFiles";
 
 const FILENAME_LANGS: Record<string, string> = {
@@ -27,26 +27,61 @@ export function accentFor(path: string) {
   return EXT_COLORS[extensionOf(path)] ?? "#64748b";
 }
 
-const highlightCache = new Map<string, string>();
 
 function escapeHtml(s: string) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function highlight(path: string, code: string): string {
-  const cached = highlightCache.get(path);
-  if (cached !== undefined) return cached;
   const ext = extensionOf(path);
   const lang = FILENAME_LANGS[ext] ?? (hljs.getLanguage(ext) ? ext : undefined);
-  let html: string;
   try {
-    html = lang ? hljs.highlight(code, { language: lang, ignoreIllegals: true }).value : escapeHtml(code);
+    return lang ? hljs.highlight(code, { language: lang, ignoreIllegals: true }).value : escapeHtml(code);
   } catch {
-    html = escapeHtml(code);
+    return escapeHtml(code);
   }
-  highlightCache.set(path, html);
+}
+
+/**
+ * Splits highlighted HTML into one fragment per source line. Tokens spanning
+ * several lines (block comments, template strings) are closed at each line
+ * end and reopened on the next line so every fragment is well-formed.
+ */
+function splitLines(html: string): string[] {
+  const lines: string[] = [];
+  const open: string[] = [];
+  let current = "";
+  for (const token of html.match(/<span[^>]*>|<\/span>|\n|[^<\n]+/g) ?? []) {
+    if (token === "\n") {
+      lines.push(current + "</span>".repeat(open.length));
+      current = open.join("");
+    } else {
+      if (token.startsWith("<span")) open.push(token);
+      else if (token === "</span>") open.pop();
+      current += token;
+    }
+  }
+  lines.push(current + "</span>".repeat(open.length));
+  return lines;
+}
+
+/** Renders the code body as a grid of rows: line number + soft-wrapped line. */
+function renderRows(file: PlacedFile): string {
+  const cached = rowsCache.get(file);
+  if (cached !== undefined) return cached;
+  const lines = splitLines(highlight(file.path, file.text));
+  let html = "";
+  for (let i = 0; i < lines.length; i++) {
+    html += `<div class="ln">${i + 1}</div><div class="lc">${lines[i]}</div>`;
+  }
+  if (file.hiddenLines > 0) {
+    html += `<div class="ln"></div><div class="lc file-card__more">… ${file.hiddenLines} more lines</div>`;
+  }
+  rowsCache.set(file, html);
   return html;
 }
+
+const rowsCache = new WeakMap<PlacedFile, string>();
 
 type Props = { file: PlacedFile; detailed: boolean; onFocus: (file: PlacedFile) => void };
 
@@ -54,13 +89,7 @@ export const FileCard = memo(function FileCard({ file, detailed, onFocus }: Prop
   const accent = accentFor(file.path);
   const style = { left: file.x, top: file.y, width: file.w, height: file.h, "--accent": accent } as React.CSSProperties;
 
-  const body = useMemo(() => {
-    if (!detailed) return null;
-    const lines = file.content.split("\n");
-    const shown = lines.slice(0, MAX_LINES).join("\n");
-    const numbers = Array.from({ length: Math.min(lines.length, MAX_LINES) }, (_, i) => i + 1).join("\n");
-    return { html: highlight(file.path, shown), numbers, hidden: Math.max(0, lines.length - MAX_LINES) };
-  }, [detailed, file.path, file.content]);
+  const rows = useMemo(() => (detailed ? renderRows(file) : null), [detailed, file]);
 
   return (
     <div
@@ -76,14 +105,12 @@ export const FileCard = memo(function FileCard({ file, detailed, onFocus }: Prop
         <span className="file-card__name">{file.name}</span>
         <span className="file-card__meta">{file.lineCount} lines</span>
       </div>
-      {body ? (
-        <div className="file-card__body">
-          <pre className="file-card__gutter">{body.numbers}</pre>
-          <pre className="file-card__code hljs">
-            <code dangerouslySetInnerHTML={{ __html: body.html }} />
-            {body.hidden > 0 && <span className="file-card__more">{`\n… ${body.hidden} more lines`}</span>}
-          </pre>
-        </div>
+      {rows !== null ? (
+        <div
+          className="file-card__code hljs"
+          style={{ gridTemplateColumns: `${GUTTER}px ${file.cols * CHAR_W}px` }}
+          dangerouslySetInnerHTML={{ __html: rows }}
+        />
       ) : (
         <div className="file-card__placeholder">
           <span style={{ fontSize: `min(calc(15px * var(--inv)), ${file.w / 9}px)` }}>{file.name}</span>

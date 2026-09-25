@@ -452,36 +452,33 @@ button {
   font-size: 11px;
 }
 
-.file-card__body {
-  display: flex;
-  flex: 1;
+/* Rows of [line number | code]. Geometry must match lib/layout.ts. */
+.file-card__code {
+  display: grid;
+  align-content: start;
   padding: 14px 14px 14px 0;
   overflow: hidden;
-}
-
-.file-card__body pre {
-  margin: 0;
+  background: transparent;
+  color: #c9d1e3;
   font-family: var(--font-mono), monospace;
   font-size: 12px;
   line-height: 18px;
-  font-variant-ligatures: contextual;
+  font-variant-ligatures: none;
 }
 
-.file-card__gutter {
-  flex: none;
-  width: 48px;
+.file-card__code .ln {
   padding-right: 14px;
   text-align: right;
   color: var(--text-faint);
   opacity: 0.6;
+  user-select: none;
 }
 
-.file-card__code {
-  flex: 1;
+/* Wrap at exactly `cols` characters so the layout can predict row counts. */
+.file-card__code .lc {
   min-width: 0;
-  overflow: hidden;
-  color: #c9d1e3;
-  background: transparent;
+  white-space: break-spaces;
+  word-break: break-all;
 }
 
 .file-card__more {

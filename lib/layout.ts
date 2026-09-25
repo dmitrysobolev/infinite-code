@@ -3,14 +3,19 @@
  * directory ends up physically grouped on the canvas.
  */
 
+// Card geometry. These must match the file-card styles in globals.css.
 export const LINE_H = 18;
-export const CHAR_W = 7.3; // JetBrains Mono @ 12px
-export const MAX_LINES = 400;
+export const CHAR_W = 7.2; // JetBrains Mono advance width (0.6em) @ 12px
+export const GUTTER = 48;
+const CARD_BORDER = 1;
 const CARD_HEADER = 40;
-const CARD_PAD = 14;
-const GUTTER = 48;
-const MIN_CARD_W = 340;
-const MAX_CARD_W = 860;
+const CODE_PAD_Y = 14;
+const CODE_PAD_RIGHT = 14;
+const TAB_SIZE = 4;
+const MIN_COLS = 40;
+const MAX_COLS = 110; // longer lines soft-wrap
+const MAX_LINES = 400;
+const MAX_ROWS = 600; // visual rows after wrapping
 const FILE_GAP = 28;
 const FOLDER_PAD = 28;
 const FOLDER_GAP = 40;
@@ -22,8 +27,12 @@ export type SourceFile = { path: string; content: string };
 export type PlacedFile = {
   path: string;
   name: string;
-  content: string;
+  /** Displayed text: tabs expanded, truncated to the visible budget. */
+  text: string;
+  /** Characters per visual row; longer lines wrap. */
+  cols: number;
   lineCount: number;
+  hiddenLines: number;
   x: number;
   y: number;
   w: number;
@@ -54,7 +63,16 @@ type Dir = { name: string; path: string; dirs: Map<string, Dir>; files: SourceFi
 
 // A node positioned relative to its parent; flattened at the end.
 type Box =
-  | { kind: "file"; w: number; h: number; file: SourceFile; lineCount: number }
+  | {
+      kind: "file";
+      w: number;
+      h: number;
+      file: SourceFile;
+      text: string;
+      cols: number;
+      lineCount: number;
+      hiddenLines: number;
+    }
   | {
       kind: "folder";
       w: number;
@@ -84,14 +102,104 @@ function buildTree(files: SourceFile[], rootName: string): Dir {
   return root;
 }
 
+// Everything below U+1100 (Latin, Greek, Cyrillic, box drawing, …) is covered
+// by JetBrains Mono at a fixed advance. Wider scripts (CJK, emoji) come from
+// fallback fonts, so their real widths are measured once and cached.
+const NARROW = /^[\u0000-ჿ]*$/;
+const charWidths = new Map<string, number>();
+let measureCtx: CanvasRenderingContext2D | null | undefined;
+
+function charWidth(ch: string): number {
+  if (ch.charCodeAt(0) < 0x1100) return CHAR_W;
+  let w = charWidths.get(ch);
+  if (w === undefined) {
+    if (measureCtx === undefined) {
+      measureCtx = typeof document === "undefined" ? null : document.createElement("canvas").getContext("2d");
+      if (measureCtx) {
+        const family = getComputedStyle(document.documentElement).getPropertyValue("--font-mono") || "monospace";
+        measureCtx.font = `12px ${family}`;
+      }
+    }
+    w = measureCtx ? measureCtx.measureText(ch).width : CHAR_W * 2;
+    charWidths.set(ch, w);
+  }
+  return w;
+}
+
+/** Width of a line in character columns (wide glyphs count as more than one). */
+function lineColumns(line: string): number {
+  if (NARROW.test(line)) return line.length;
+  let w = 0;
+  for (const ch of line) w += charWidth(ch);
+  return w / CHAR_W;
+}
+
+/** Visual rows a line occupies when broken anywhere at `cols` columns. */
+function wrappedRows(line: string, cols: number): number {
+  if (NARROW.test(line)) return Math.max(1, Math.ceil(line.length / cols));
+  const max = cols * CHAR_W + 0.01;
+  let rows = 1;
+  let w = 0;
+  for (const ch of line) {
+    const cw = charWidth(ch);
+    if (w + cw > max) {
+      rows++;
+      w = cw;
+    } else w += cw;
+  }
+  return rows;
+}
+
+function expandTabs(line: string): string {
+  if (!line.includes("\t")) return line;
+  let out = "";
+  for (const ch of line) out += ch === "\t" ? " ".repeat(TAB_SIZE - (out.length % TAB_SIZE)) : ch;
+  return out;
+}
+
+/**
+ * Sizes a card from its content. Long lines soft-wrap at exactly `cols`
+ * characters (the renderer breaks anywhere, and the font is monospace), so the
+ * number of visual rows — and therefore the card height — is known up front.
+ */
 function measureFile(file: SourceFile): Box {
   const lines = file.content.split("\n");
-  const shown = Math.min(lines.length, MAX_LINES);
+  const shown: string[] = [];
   let longest = 0;
-  for (let i = 0; i < shown; i++) longest = Math.max(longest, lines[i].length);
-  const w = Math.min(MAX_CARD_W, Math.max(MIN_CARD_W, longest * CHAR_W + GUTTER + CARD_PAD * 2));
-  const h = CARD_HEADER + CARD_PAD * 2 + (shown + (lines.length > MAX_LINES ? 1 : 0)) * LINE_H;
-  return { kind: "file", w, h, file, lineCount: lines.length };
+  for (const raw of lines.slice(0, MAX_LINES)) {
+    const line = expandTabs(raw);
+    shown.push(line);
+    longest = Math.max(longest, lineColumns(line));
+  }
+  const cols = Math.min(MAX_COLS, Math.max(MIN_COLS, Math.ceil(longest)));
+
+  let rows = 0;
+  let kept = 0;
+  for (; kept < shown.length && rows < MAX_ROWS; kept++) {
+    const lineRows = wrappedRows(shown[kept], cols);
+    if (rows + lineRows > MAX_ROWS) {
+      // A huge line (e.g. minified code) is cut to fit the remaining budget.
+      shown[kept] = shown[kept].slice(0, (MAX_ROWS - rows) * cols);
+      rows = MAX_ROWS;
+      kept++;
+      break;
+    }
+    rows += lineRows;
+  }
+  const hiddenLines = lines.length - kept;
+
+  const w = CARD_BORDER * 2 + GUTTER + cols * CHAR_W + CODE_PAD_RIGHT;
+  const h = CARD_BORDER * 2 + CARD_HEADER + CODE_PAD_Y * 2 + (rows + (hiddenLines > 0 ? 1 : 0)) * LINE_H;
+  return {
+    kind: "file",
+    w,
+    h,
+    file,
+    text: shown.slice(0, kept).join("\n"),
+    cols,
+    lineCount: lines.length,
+    hiddenLines,
+  };
 }
 
 /**
@@ -191,8 +299,10 @@ export function computeLayout(files: SourceFile[], rootName: string): Layout {
       out.files.push({
         path: node.file.path,
         name: node.file.path.slice(node.file.path.lastIndexOf("/") + 1),
-        content: node.file.content,
+        text: node.text,
+        cols: node.cols,
         lineCount: node.lineCount,
+        hiddenLines: node.hiddenLines,
         x, y, w: node.w, h: node.h, depth,
       });
       return;

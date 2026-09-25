@@ -58,6 +58,9 @@ export function RepoView({ owner, repo, gitRef }: { owner: string; repo: string;
         }
       };
       await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+      // The layout measures glyph widths, so the code font must be ready first.
+      const mono = getComputedStyle(document.documentElement).getPropertyValue("--font-mono");
+      await document.fonts.load(`12px ${mono}`).catch(() => {});
       if (cancelled) return;
       setState({ status: "ready", tree, files: results.filter((f): f is SourceFile => f !== null) });
     })().catch((e) => !cancelled && setState({ status: "error", message: String(e) }));

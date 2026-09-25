@@ -29,9 +29,11 @@ export function InfiniteCanvas({ layout }: { layout: Layout }) {
 
   // Camera tweens run in JS (not CSS transitions) so culling, level of detail
   // and label sizes stay in sync with the transform on every frame.
-  const animRef = useRef<number | null>(null);
+  const animRef = useRef<{ frame: number; fallback: ReturnType<typeof setTimeout> } | null>(null);
   const stopAnimation = useCallback(() => {
-    if (animRef.current !== null) cancelAnimationFrame(animRef.current);
+    if (!animRef.current) return;
+    cancelAnimationFrame(animRef.current.frame);
+    clearTimeout(animRef.current.fallback);
     animRef.current = null;
   }, []);
 
@@ -55,9 +57,18 @@ export function InfiniteCanvas({ layout }: { layout: Layout }) {
         const cx = c0.x + (c1.x - c0.x) * e;
         const cy = c0.y + (c1.y - c0.y) * e;
         setCamera({ scale, x: hw - cx * scale, y: hh - cy * scale });
-        animRef.current = t < 1 ? requestAnimationFrame(tick) : null;
+        if (t < 1 && animRef.current) animRef.current.frame = requestAnimationFrame(tick);
+        else stopAnimation();
       };
-      animRef.current = requestAnimationFrame(tick);
+      animRef.current = {
+        frame: requestAnimationFrame(tick),
+        // Background or occluded tabs may never deliver animation frames;
+        // make sure the camera still ends up where it was sent.
+        fallback: setTimeout(() => {
+          stopAnimation();
+          setCamera(target);
+        }, ANIMATION_MS + 200),
+      };
     },
     [stopAnimation]
   );
