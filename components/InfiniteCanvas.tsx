@@ -157,14 +157,60 @@ export function InfiniteCanvas({ layout }: { layout: Layout }) {
     return () => el.removeEventListener("wheel", onWheel);
   }, [zoomAt, stopAnimation]);
 
-  // Drag to pan.
+  // Pointer input: one pointer pans, two pointers (touch) pinch-zoom and pan
+  // together around the point between the fingers.
+  const pointers = useRef(new Map<number, { x: number; y: number }>());
   const drag = useRef<{ id: number; x: number; y: number; started: boolean } | null>(null);
+  const pinch = useRef<{ dist: number; midX: number; midY: number } | null>(null);
   const [dragging, setDragging] = useState(false);
-  const onPointerDown = (e: React.PointerEvent) => {
-    if (e.button !== 0 && e.button !== 1) return;
-    drag.current = { id: e.pointerId, x: e.clientX, y: e.clientY, started: false };
+
+  const pinchState = () => {
+    const [a, b] = [...pointers.current.values()];
+    const rect = containerRef.current!.getBoundingClientRect();
+    return {
+      dist: Math.max(1, Math.hypot(b.x - a.x, b.y - a.y)),
+      midX: (a.x + b.x) / 2 - rect.left,
+      midY: (a.y + b.y) / 2 - rect.top,
+    };
   };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (e.pointerType === "mouse" && e.button !== 0 && e.button !== 1) return;
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.current.size === 2) {
+      // Second finger down: switch from panning to pinching.
+      for (const id of pointers.current.keys()) {
+        try {
+          (e.currentTarget as HTMLElement).setPointerCapture(id);
+        } catch {}
+      }
+      drag.current = null;
+      pinch.current = pinchState();
+      setDragging(true);
+      stopAnimation();
+    } else if (pointers.current.size === 1) {
+      drag.current = { id: e.pointerId, x: e.clientX, y: e.clientY, started: false };
+    }
+  };
+
   const onPointerMove = (e: React.PointerEvent) => {
+    if (!pointers.current.has(e.pointerId)) return;
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    const p = pinch.current;
+    if (p && pointers.current.size >= 2) {
+      const next = pinchState();
+      const factor = next.dist / p.dist;
+      setCamera((c) => {
+        const scale = clamp(c.scale * factor, MIN_SCALE, MAX_SCALE);
+        const k = scale / c.scale;
+        // Zoom around the previous midpoint, then follow the midpoint's movement.
+        return { scale, x: next.midX - (p.midX - c.x) * k, y: next.midY - (p.midY - c.y) * k };
+      });
+      pinch.current = next;
+      return;
+    }
+
     const d = drag.current;
     if (!d || d.id !== e.pointerId) return;
     const dx = e.clientX - d.x;
@@ -181,12 +227,35 @@ export function InfiniteCanvas({ layout }: { layout: Layout }) {
     d.y = e.clientY;
     setCamera((c) => ({ ...c, x: c.x + dx, y: c.y + dy }));
   };
+
   const onPointerUp = (e: React.PointerEvent) => {
-    if (drag.current?.id === e.pointerId) {
+    if (!pointers.current.delete(e.pointerId)) return;
+    pinch.current = null;
+    const rest = [...pointers.current.entries()];
+    if (rest.length === 1) {
+      // One finger lifted mid-pinch: keep panning with the other, without a jump.
+      const [id, pos] = rest[0];
+      drag.current = { id, x: pos.x, y: pos.y, started: true };
+    } else if (rest.length === 0) {
       drag.current = null;
       setDragging(false);
+    } else {
+      pinch.current = pinchState();
     }
   };
+
+  // iOS Safari emits its own gesture events on pinch and would zoom the whole
+  // page; the canvas handles pinch itself via pointer events.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const block = (e: Event) => e.preventDefault();
+    const events = ["gesturestart", "gesturechange", "gestureend"];
+    for (const name of events) el.addEventListener(name, block, { passive: false });
+    return () => {
+      for (const name of events) el.removeEventListener(name, block);
+    };
+  }, []);
 
   // Keyboard shortcuts.
   useEffect(() => {
